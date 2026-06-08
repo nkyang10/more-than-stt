@@ -52,7 +52,7 @@ public class SenseVoiceEngine : IDisposable
 
         // Load ONNX Runtime
         var opts = new SessionOptions();
-        opts.GraphOptimizationLevel = GraphOptimizationLevel.ORT_DISABLE_ALL;
+        opts.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
         _session = new InferenceSession(modelPath, opts);
 
         // Pre-compute mel filterbank
@@ -99,9 +99,9 @@ public class SenseVoiceEngine : IDisposable
         var inputs = new List<NamedOnnxValue>
         {
             NamedOnnxValue.CreateFromTensor("speech", speech),
-            NamedOnnxValue.CreateFromTensor("speech_lengths", new DenseTensor<int>(new[] { numFrames })),
-            NamedOnnxValue.CreateFromTensor("language", new DenseTensor<int>(new[] { langId })),
-            NamedOnnxValue.CreateFromTensor("textnorm", new DenseTensor<int>(new[] { 1 })),
+            NamedOnnxValue.CreateFromTensor("speech_lengths", new DenseTensor<int>(new[] { 1 }) { [0] = numFrames }),
+            NamedOnnxValue.CreateFromTensor("language", new DenseTensor<int>(new[] { 1 }) { [0] = langId }),
+            NamedOnnxValue.CreateFromTensor("textnorm", new DenseTensor<int>(new[] { 1 }) { [0] = 1 }),
         };
 
         using var results = _session.Run(inputs);
