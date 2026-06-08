@@ -63,18 +63,26 @@ public static class AutoUpdater
     {
         get
         {
+            // Read version from version.txt shipped alongside the exe
+            try
+            {
+                var exeDir = Path.GetDirectoryName(Application.ExecutablePath) ?? ".";
+                var versionFile = Path.Combine(exeDir, "version.txt");
+                if (File.Exists(versionFile))
+                {
+                    var v = File.ReadAllText(versionFile).Trim();
+                    if (!string.IsNullOrEmpty(v)) return v;
+                }
+            }
+            catch { }
+            // Fallback: assembly version
             try
             {
                 var ver = Assembly.GetExecutingAssembly().GetName().Version;
-                if (ver != null && (ver.Major != 0 || ver.Minor != 0 || ver.Build != 0))
-                    return $"{ver.Major}.{ver.Minor}.{ver.Build}";
+                if (ver != null) return $"{ver.Major}.{ver.Minor}.{ver.Build}";
             }
             catch { }
-            // Fallback: read from version.txt shipped alongside the exe
-            var versionFile = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath) ?? ".", "version.txt");
-            if (File.Exists(versionFile))
-                return File.ReadAllText(versionFile).Trim();
-            return "1.0.0";
+            return "0.0.0";
         }
     }
 
@@ -163,7 +171,8 @@ public static class AutoUpdater
             else
             {
                 var tag = release.tag_name.TrimStart('v');
-                var current = new Version(CurrentVersion);
+                var currentVer = CurrentVersion.TrimStart('v');
+                var current = Version.TryParse(currentVer, out var curParsed) ? curParsed : new Version(0, 0, 0);
                 var latest = Version.TryParse(tag, out var parsed) ? parsed : new Version(0, 0, 0);
                 isNewer = latest > current;
                 AppLogger.Info($"Version compare: current={CurrentVersion} latest={tag} => isNewer={isNewer}");
