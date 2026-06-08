@@ -17,8 +17,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.21.0" />
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.2" />
   </ItemGroup>
 
   <!-- When referenced as a library (e.g. by TestRunner), exclude the UI entry point -->
@@ -32,14 +32,9 @@
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
   </PropertyGroup>
 
+  <!-- Copy Sherpa-ONNX model folder -->
   <ItemGroup>
-    <None Update="model_quant.onnx">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Update="tokens.txt">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Update="am.mvn">
+    <None Update="sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

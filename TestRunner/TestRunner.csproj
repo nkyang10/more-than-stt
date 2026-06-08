@@ -15,6 +15,10 @@
       <AdditionalProperties>ExcludeEntryPoint=true</AdditionalProperties>
     </ProjectReference>
   </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.2" />
+  </ItemGroup>
   <Target Name="CleanReferencedProjectObj" BeforeTargets="BeforeBuild">
     <RemoveDir Directories="..\obj\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)" />
   </Target>
