@@ -203,7 +203,10 @@ public static class AutoUpdater
                     entry.ExtractToFile(destPath, overwrite: true);
                 }
             }
-            File.Delete(zipPath);
+
+            // Retry delete zip (Windows Defender / AV may hold a lock briefly)
+            AppLogger.Info("Deleting update.zip...");
+            await RetryDeleteAsync(zipPath);
 
             // SAFETY: Only copy EXPLICIT known filenames to baseDir (no wildcard)
             var allowedFiles = new[] { "CantoneseDictation.exe", "tokens.txt", "am.mvn", "README.txt" };
@@ -255,6 +258,26 @@ public static class AutoUpdater
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
         }
+    }
+
+    private static async Task RetryDeleteAsync(string path, int maxRetries = 5)
+    {
+        for (int i = 0; i < maxRetries; i++)
+        {
+            try
+            {
+                File.Delete(path);
+                AppLogger.Info($"Deleted: {path}");
+                return;
+            }
+            catch (IOException) when (i < maxRetries - 1)
+            {
+                AppLogger.Warn($"File locked, retrying in 500ms... ({i + 1}/{maxRetries})");
+                await Task.Delay(500);
+            }
+        }
+        // Last attempt - let it throw
+        File.Delete(path);
     }
 
     private static string GetUpdaterBatchContent(int pid, string currentExe,
