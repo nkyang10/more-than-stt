@@ -11,7 +11,11 @@ VERSION_MSG="${1:-CI build $(date '+%Y%m%d-%H%M')}"
 RELEASE_TAG="ci"
 
 echo "=== Building..."
-dotnet publish -c Release -r win-x64 --self-contained true -o dist/ -p:Version=0.0.0 2>&1 | grep -E "error|Build|->"
+dotnet publish -c Release -r win-x64 --self-contained true -o dist/ 2>&1 | grep -E "error|Build|->"
+
+# Extract version from csproj for CI release notes
+CI_VER=$(grep '<Version>' CantoneseDictation.csproj | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/')
+echo "Version from csproj: $CI_VER"
 
 echo "=== Packaging..."
 mkdir -p release_beta
