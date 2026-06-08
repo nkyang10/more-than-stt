@@ -227,6 +227,28 @@ public class MainForm : Form
         btnUpdate.Click += async (s, e) => await CheckForUpdateAsync();
         recRow.Controls.Add(btnUpdate);
 
+        var btnBeta = new Button
+        {
+            Text = AutoUpdater.UseBetaChannel ? "🧪 Beta ON" : "🧪 Beta",
+            Font = new Font("Segoe UI", 9),
+            ForeColor = AutoUpdater.UseBetaChannel ? FgYellow : FgSubtle,
+            BackColor = AutoUpdater.UseBetaChannel ? Color.FromArgb(69, 69, 117) : BgCard,
+            FlatStyle = FlatStyle.Flat,
+            FlatAppearance = { BorderSize = 0 },
+            Size = new Size(80, 30),
+            Location = new Point(690, 18),
+            Cursor = Cursors.Hand
+        };
+        btnBeta.Click += (s, e) =>
+        {
+            AutoUpdater.UseBetaChannel = !AutoUpdater.UseBetaChannel;
+            btnBeta.Text = AutoUpdater.UseBetaChannel ? "🧪 Beta ON" : "🧪 Beta";
+            btnBeta.ForeColor = AutoUpdater.UseBetaChannel ? FgYellow : FgSubtle;
+            btnBeta.BackColor = AutoUpdater.UseBetaChannel ? Color.FromArgb(69, 69, 117) : BgCard;
+            SetStatus(AutoUpdater.UseBetaChannel ? "🧪 Beta channel: CI builds" : "✅ Stable channel: releases");
+        };
+        recRow.Controls.Add(btnBeta);
+
         recRow.Controls.Add(btnRecord);
         recRow.Controls.Add(langLabel);
         recRow.Controls.Add(cmbLanguage);

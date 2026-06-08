@@ -41,6 +41,8 @@ public static class AutoUpdater
 
     private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
 
+    public static bool UseBetaChannel { get; set; } = false;
+
     public static string CurrentVersion
     {
         get
@@ -55,7 +57,9 @@ public static class AutoUpdater
     {
         try
         {
-            var url = $"https://api.github.com/repos/{RepoOwner}/{RepoName}/releases/latest";
+            var url = UseBetaChannel
+                ? $"https://api.github.com/repos/{RepoOwner}/{RepoName}/releases/tags/ci"
+                : $"https://api.github.com/repos/{RepoOwner}/{RepoName}/releases/latest";
             var req = new HttpRequestMessage(HttpMethod.Get, url);
             req.Headers.UserAgent.ParseAdd("CantoneseDictation-Updater/1.0");
 
@@ -73,7 +77,8 @@ public static class AutoUpdater
 
             // Find zip asset — prefer the app zip (not sensevoice_model)
             var zipAsset = Array.Find(release.assets, a =>
-                a.name.StartsWith("CantoneseDictation") && a.name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                (a.name.StartsWith("CantoneseDictation_v") || a.name.StartsWith("CantoneseDictation_beta"))
+                && a.name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                 ?? Array.Find(release.assets, a =>
                     a.name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
 
