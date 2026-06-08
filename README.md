@@ -1,30 +1,32 @@
 # More Than STT 🎙️
 
-Just want to try building a more friendly STT usage.
-
 SenseVoice-powered dictation app for Windows — high-accuracy Cantonese + Mandarin + English speech-to-text with self-learning hotwords.
+
+Powered by [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) (12.8k ★) — no internet required, all inference runs locally via ONNX Runtime.
 
 ## Features
 
-- 🎤 **Record & Transcribe** — 5-second recording, auto-transcribe via ONNX
+- 🎤 **Record & Transcribe** — 5-second recording, auto-transcribe via Sherpa-ONNX
 - 🧠 **Self-learning** — Correct mistakes, click "Teach Me!", it learns your words with reinforcement (+5 weight per correction)
-- 🔥 **Hotword Biasing** — Learned words are boosted during CTC decoding (+2.5 logit bias) and post-processed with fuzzy matching
-- 🌐 **Multi-language** — auto, yue (Cantonese), zh, en
-- 📂 **Load Audio Files** — WAV/MP3/OGG/M4A
+- 🔥 **Hotword Biasing** — Learned words are boosted during decoding via Sherpa-ONNX contextual biasing
+- 🌐 **Multi-language** — auto, yue (Cantonese), zh, en, ja, ko
+- 📂 **Load Audio Files** — WAV/MP3/OGG/M4A (auto-resampled to 16kHz)
 - 📋 **Detailed Logging** — Every run logged for debugging
 - 🔄 **Auto-Update** — One-click update from GitHub Releases (stable + beta channels)
 - 🎛️ **Mic Gain** — Adjustable amplification (1–10x) for quiet microphones
 - 🔍 **Hotword Manager** — Add/remove/search hotwords, filter by source (manual vs learned)
 - ⌨️ **Keyboard Shortcuts** — F5 (record), Ctrl+Enter (Teach Me!), Ctrl+L (load audio)
+- 🚀 **Performance** — RTF ~0.01 (100x realtime) on modern CPUs
 
 ## Quick Start
 
 1. Go to [Releases](https://github.com/nkyang10/more-than-stt/releases)
-2. Download the latest `CantoneseDictation_v*.zip` and `sensevoice_model_v*.zip`
-3. Extract both to the same folder
-4. Run `CantoneseDictation.exe`
-5. Click **🔴 開始錄音 (F5)** and speak!
-6. Correct any mistakes in the editor → click **🧠 Teach Me!** → it learns
+2. Download the latest `CantoneseDictation_v*.zip`
+3. Download the Sherpa-ONNX Cantonese model from [GitHub](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models): `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2`
+4. Extract the model folder `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/` **inside** the app folder
+5. Run `CantoneseDictation.exe`
+6. Click **🔴 開始錄音 (F5)** and speak!
+7. Correct any mistakes in the editor → click **🧠 Teach Me!** → it learns
 
 ## Build from Source
 
@@ -42,17 +44,30 @@ dotnet publish -c Release -r win-x64 --self-contained true -o dist/
 .\build.ps1
 ```
 
-### Model Files
+### Model Setup
 
-These are **not** included in the repo (gitignored, large). Download them from [Releases](https://github.com/nkyang10/more-than-stt/releases):
+The model is **not** included in the repo (226 MB, gitignored). Download and extract:
 
-| File | Size | Description |
-|---|---|---|
-| `model_quant.onnx` | 232 MB | SenseVoice quantized ONNX model |
-| `tokens.txt` | 173 KB | BPE vocabulary (25055 tokens) |
-| `am.mvn` | 11 KB | Audio normalization params |
+```bash
+# Download Cantonese-optimized model (21.8k hours Cantonese fine-tune)
+curl -L -o model.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2
 
-Place them alongside `CantoneseDictation.exe`, or in `%LOCALAPPDATA%\CantoneseDictation\`.
+# Or use PowerShell
+Invoke-WebRequest -Uri "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2" -OutFile model.tar.bz2
+
+# Extract using tar
+tar -xf model.tar.bz2
+
+# Place the folder alongside CantoneseDictation.exe
+```
+
+Required files:
+```
+sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/
+├── model.int8.onnx   (226 MB, quantized ONNX model)
+├── tokens.txt        (308 KB, BPE vocabulary)
+└── test_wavs/        (sample test files for verification)
+```
 
 ## How It Works
 
@@ -60,30 +75,33 @@ Place them alongside `CantoneseDictation.exe`, or in `%LOCALAPPDATA%\CantoneseDi
 You speak "ComfyUI"      → ASR outputs "comefi u i"
 You correct to "ComfyUI" → Click Teach Me!
                          → System learns: ComfyUI added to hotword list (weight: 20)
-                         → Next time → CTC logit boosting + fuzzy post-processing → "ComfyUI" ✅
-
-Each re-correction: weight += 5 (reinforcement learning)
+                         → Next time → Sherpa-ONNX contextual biasing → "ComfyUI" ✅
 ```
 
-### Hotword Biasing Pipeline
+**Tech Stack:** .NET 10 WinForms • [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) (12.8k ★) • NAudio
 
-1. **CTC logit boosting** — Token IDs matching hotwords get +2.5 added during greedy decoding
-2. **Post-decode matching** — Fuzzy string matching substitutes ASR output with correct hotword text
-3. **Reinforcement** — Each correction increases hotword weight by 5
+## Performance
 
-**Tech Stack:** .NET 10 WinForms • ONNX Runtime • SenseVoice (FunASR) • NAudio
+| Metric | Value |
+|---|---|
+| Model | SenseVoice (int8 quantized) |
+| Languages | zh, en, yue, ja, ko |
+| RTF (CPU) | ~0.01–0.02 (50–100x realtime) |
+| RAM usage | ~500 MB |
+| Cantonese accuracy | Fine-tuned on 21.8k hours |
 
 ## Project Structure
 
 ```
 CantoneseDictationNet2/
 ├── .github/workflows/       # GitHub Actions CI/CD
-├── TestRunner/               # Unit tests (34 tests)
-├── CantoneseDictation.csproj # .NET project
+├── TestRunner/               # Unit tests (28 tests)
+├── sherpa-onnx-...-09/       # Model folder (download separately)
+├── CantoneseDictation.csproj # .NET project (Sherpa-ONNX + NAudio)
 ├── AppPaths.cs               # Shared path constants
 ├── Program.cs                # Entry point
 ├── MainForm.cs               # UI (dark theme, WinForms)
-├── SenseVoiceEngine.cs       # ONNX inference + feature extraction + hotword biasing
+├── SenseVoiceEngine.cs       # Sherpa-ONNX wrapper
 ├── HotwordManager.cs         # Self-learning hotword system (with source tracking)
 ├── AutoUpdater.cs            # GitHub Releases auto-update
 ├── Logger.cs                 # File logging
@@ -97,10 +115,9 @@ CantoneseDictationNet2/
 dotnet run --project TestRunner\TestRunner.csproj
 ```
 
-Requires model files in the project root. Tests cover:
+Requires model folder in the project root. Tests cover:
 - HotwordManager (learn, reinforce, manual add/remove, persistence, sources)
-- Hotword processing (direct match, phrase match, token ID computation)
-- Full ONNX pipeline (model load, audio processing, inference, decode, hotword bias)
+- Full Sherpa-ONNX pipeline (model load, audio processing, inference, hotword biasing)
 - Logger (file creation, levels, exception detail)
 
 ## License
