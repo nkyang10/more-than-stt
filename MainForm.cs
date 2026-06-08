@@ -111,7 +111,7 @@ public class MainForm : Form
             ForeColor = FgWhite,
             Padding = new Point(10, 4)
         };
-        tabControl.SelectedIndexChanged += (s, e) => { if (tabControl.SelectedIndex == 2) RefreshStatsTab(); };
+        tabControl.SelectedIndexChanged += (s, e) => { if (tabControl.SelectedIndex == 3) RefreshStatsTab(); };
 
         var tab1 = new TabPage("🎤 Dictation") { BackColor = BgDark };
         var tab2 = new TabPage("📋 History") { BackColor = BgDark };
@@ -132,7 +132,12 @@ public class MainForm : Form
 
         // Hotkeys
         this.KeyPreview = true;
-        this.KeyDown += (s, e) => { if (e.KeyCode == Keys.F5) ToggleRecording(); };
+        this.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode == Keys.F5) ToggleRecording();
+            else if (e.Control && e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; LearnFromCorrection(null, EventArgs.Empty); }
+            else if (e.Control && e.KeyCode == Keys.L) { e.SuppressKeyPress = true; _ = LoadAudioFile(); }
+        };
     }
 
     private void BuildDictationTab(TabPage tab)
@@ -344,6 +349,23 @@ public class MainForm : Form
             AutoSize = true,
             Location = new Point(200, 195)
         };
+
+        var btnClearResult = new Button
+        {
+            Text = "🗑 Clear",
+            Font = new Font("Segoe UI", 9),
+            ForeColor = FgRed,
+            BackColor = BgCard,
+            FlatStyle = FlatStyle.Flat,
+            FlatAppearance = { BorderSize = 0 },
+            Size = new Size(70, 24),
+            Location = new Point(this.Width - 90, 193),
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
+            Cursor = Cursors.Hand
+        };
+        btnClearResult.Click += (s, e) => { txtResult.Clear(); txtCorrection.Clear(); };
+        tab.Controls.Add(btnClearResult);
+
         tab.Controls.Add(lblTime);
         tab.Controls.Add(lblHotwordActive);
 
@@ -424,7 +446,10 @@ public class MainForm : Form
             FlatAppearance = { BorderSize = 0 }, Cursor = Cursors.Hand
         };
 
-        topRow.Controls.AddRange(new Control[] { lblWord, txtWord, lblWeight, txtWeight, btnAdd });
+        var lblFilter = new Label { Text = "🔍 Filter:", ForeColor = FgWhite, BackColor = BgDark, AutoSize = true, Location = new Point(430, 10) };
+        _hotwordFilterBox = new TextBox { Location = new Point(480, 7), Width = 120, BackColor = BgInput, ForeColor = FgWhite, BorderStyle = BorderStyle.FixedSingle };
+
+        topRow.Controls.AddRange(new Control[] { lblWord, txtWord, lblWeight, txtWeight, btnAdd, lblFilter, _hotwordFilterBox });
         tab.Controls.Add(topRow);
 
         hotwordList = new ListView
@@ -443,14 +468,33 @@ public class MainForm : Form
 
         // Bottom row
         var bottomRow = new Panel { Height = 40, Dock = DockStyle.Bottom, BackColor = BgDark, Padding = new Padding(10) };
+
+        var statLabel = new Label
+        {
+            Text = "",
+            ForeColor = FgSubtle, BackColor = BgDark, AutoSize = true,
+            Location = new Point(10, 10)
+        };
+
         var btnRemove = new Button
         {
             Text = "🗑️ Remove Selected",
-            Location = new Point(10, 5), Size = new Size(150, 28),
+            Location = new Point(200, 5), Size = new Size(150, 28),
             ForeColor = FgRed, BackColor = BgCard, FlatStyle = FlatStyle.Flat,
             FlatAppearance = { BorderSize = 0 }, Cursor = Cursors.Hand
         };
+
+        var btnClearAll = new Button
+        {
+            Text = "🧹 Clear All",
+            Location = new Point(360, 5), Size = new Size(100, 28),
+            ForeColor = FgYellow, BackColor = BgCard, FlatStyle = FlatStyle.Flat,
+            FlatAppearance = { BorderSize = 0 }, Cursor = Cursors.Hand
+        };
+
+        bottomRow.Controls.Add(statLabel);
         bottomRow.Controls.Add(btnRemove);
+        bottomRow.Controls.Add(btnClearAll);
         tab.Controls.Add(bottomRow);
 
         btnAdd.Click += (s, e) =>
@@ -469,11 +513,35 @@ public class MainForm : Form
         {
             if (hotwordList.SelectedItems.Count > 0)
             {
-                _hotwordMgr.Remove(hotwordList.SelectedItems[0].Text);
+                var word = hotwordList.SelectedItems[0].Text;
+                var confirm = MessageBox.Show($"Remove \"{word}\" from hotwords?", "Confirm",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (confirm == DialogResult.Yes)
+                {
+                    _hotwordMgr.Remove(word);
+                    RefreshHotwordTab();
+                    RefreshStatusBar();
+                }
+            }
+        };
+
+        btnClearAll.Click += (s, e) =>
+        {
+            if (_hotwordMgr.Hotwords.Count == 0) return;
+            var confirm = MessageBox.Show($"Remove ALL {_hotwordMgr.Hotwords.Count} hotwords?\nThis cannot be undone.",
+                "Clear All Hotwords", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (confirm == DialogResult.Yes)
+            {
+                foreach (var w in _hotwordMgr.Hotwords.Keys.ToList())
+                    _hotwordMgr.Remove(w);
                 RefreshHotwordTab();
                 RefreshStatusBar();
             }
         };
+
+        _hotwordFilterBox.TextChanged += (s, e) => RefreshHotwordTab();
+
+        _hotwordTabStatLabel = statLabel;
     }
 
     private void BuildStatsTab(TabPage tab)
@@ -529,6 +597,8 @@ public class MainForm : Form
     }
 
     private RichTextBox _statsBox;
+    private Label? _hotwordTabStatLabel;
+    private TextBox? _hotwordFilterBox;
 
     // ═══════════════════════════════════════════════════
     //  Actions
@@ -610,7 +680,7 @@ public class MainForm : Form
             AppLogger.Info($"Debug copy: {debugPath}");
 
             SetStatus("🧠 Transcribing...");
-            var result = _engine.Transcribe(tmpPath, lang);
+            var result = _engine.Transcribe(tmpPath, lang, _hotwordMgr.Hotwords);
             File.Delete(tmpPath);
 
             if (string.IsNullOrEmpty(result.Text))
@@ -657,7 +727,7 @@ public class MainForm : Form
             var lang = cmbLanguage.SelectedItem?.ToString() ?? "auto";
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var result = await Task.Run(() => _engine!.Transcribe(dlg.FileName, lang));
+            var result = await Task.Run(() => _engine!.Transcribe(dlg.FileName, lang, _hotwordMgr.Hotwords));
             sw.Stop();
 
             ShowResult(result.Text, result.TimeSeconds, lang, "");
@@ -676,11 +746,12 @@ public class MainForm : Form
 
         if (seconds > 0)
         {
-            var ratio = 7.7 / seconds; // approximate
+            var ratio = 7.7 / seconds;
             lblTime.Text = $"⏱ {seconds:F3}s ({ratio:F0}x realtime) | lang: {lang}";
         }
 
-        lblHotwordActive.Text = string.IsNullOrEmpty(hotword) ? "" : "🧠 Hotwords active";
+        var hwCount = _hotwordMgr.Hotwords.Count;
+        lblHotwordActive.Text = hwCount > 0 ? $"🧠 {hwCount} hotwords active" : "";
         SetStatus($"✅ Transcribed in {seconds:F3}s");
     }
 
@@ -689,9 +760,15 @@ public class MainForm : Form
         var asrText = txtResult.Text.Trim();
         var corrected = txtCorrection.Text.Trim();
 
-        if (string.IsNullOrEmpty(corrected) || corrected == asrText)
+        if (string.IsNullOrEmpty(corrected))
         {
-            SetStatus("No changes to learn from", true);
+            SetStatus("✏️ Enter a correction first", true);
+            return;
+        }
+
+        if (corrected == asrText)
+        {
+            SetStatus("No changes to learn from — edit the text first", true);
             return;
         }
 
@@ -701,12 +778,15 @@ public class MainForm : Form
             SetStatus($"🧠 Learned: {string.Join(", ", learned)} ✅");
             RefreshHistoryTab();
             RefreshHotwordTab();
+            RefreshStatusBar();
+
+            // Update the result box to show corrected version
+            txtResult.Text = corrected;
         }
         else
         {
-            SetStatus("No new words to learn");
+            SetStatus("No new words to learn (common words are skipped)");
         }
-        RefreshStatusBar();
     }
 
     // ═══════════════════════════════════════════════════
@@ -728,14 +808,20 @@ public class MainForm : Form
 
     private void RefreshHotwordTab()
     {
+        var filter = _hotwordFilterBox?.Text.Trim().ToLowerInvariant() ?? "";
         hotwordList.Items.Clear();
         foreach (var (word, weight) in _hotwordMgr.Hotwords.OrderByDescending(kv => kv.Value))
         {
+            if (!string.IsNullOrEmpty(filter) && !word.ToLowerInvariant().Contains(filter))
+                continue;
             var item = new ListViewItem(word);
             item.SubItems.Add(weight.ToString());
-            item.SubItems.Add("🧠 Learned");
+            var source = _hotwordMgr.HotwordSources.TryGetValue(word, out var s) ? s : "learned";
+            item.SubItems.Add(source == "manual" ? "✋ Manual" : "🧠 Learned");
             hotwordList.Items.Add(item);
         }
+        if (_hotwordTabStatLabel != null)
+            _hotwordTabStatLabel.Text = $"📊 {hotwordList.Items.Count} / {_hotwordMgr.Hotwords.Count} hotwords";
     }
 
     private void RefreshStatsTab()
@@ -754,6 +840,7 @@ public class MainForm : Form
     {
         var stats = _hotwordMgr.GetStats();
         statusLabel.Text = $"🧠 {stats.totalHotwords} words | 📋 {stats.totalCorrections} corrections";
+        this.Text = $"廣東話聽寫測試 v1.0 — {stats.totalHotwords} hotwords, {stats.totalCorrections} corrections";
     }
 
     private void SetStatus(string msg, bool isError = false)

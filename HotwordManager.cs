@@ -18,6 +18,7 @@ public class CorrectionEntry
 public class HotwordManager
 {
     private Dictionary<string, int> _hotwords = new();
+    private Dictionary<string, string> _hotwordSources = new(); // "manual" or "learned"
     private List<CorrectionEntry> _corrections = new();
 
     private static readonly HashSet<string> CommonWords = new(StringComparer.OrdinalIgnoreCase)
@@ -29,39 +30,53 @@ public class HotwordManager
     private static readonly char[] trimChars = ".,!?，。！？、；：\"''（）()「」【】".ToCharArray();
 
     public IReadOnlyDictionary<string, int> Hotwords => _hotwords;
+    public IReadOnlyDictionary<string, string> HotwordSources => _hotwordSources;
 
     public void Load()
     {
-        if (File.Exists(Program.HotwordFile))
+        if (File.Exists(AppPaths.HotwordFile))
         {
-            var json = File.ReadAllText(Program.HotwordFile);
+            var json = File.ReadAllText(AppPaths.HotwordFile);
             var data = JsonSerializer.Deserialize<Dictionary<string, object>>(json);
             if (data != null && data.TryGetValue("hotwords", out var hw))
             {
                 _hotwords = JsonSerializer.Deserialize<Dictionary<string, int>>(hw.ToString()!) ?? new();
             }
+            if (data != null && data.TryGetValue("sources", out var src))
+            {
+                var raw = src.ToString();
+                if (raw != null)
+                    _hotwordSources = JsonSerializer.Deserialize<Dictionary<string, string>>(raw) ?? new();
+            }
         }
 
-        if (File.Exists(Program.HistoryFile))
+        // Back-fill sources for hotwords loaded from old format
+        foreach (var kw in _hotwords.Keys)
         {
-            var json = File.ReadAllText(Program.HistoryFile);
+            if (!_hotwordSources.ContainsKey(kw))
+                _hotwordSources[kw] = "learned";
+        }
+
+        if (File.Exists(AppPaths.HistoryFile))
+        {
+            var json = File.ReadAllText(AppPaths.HistoryFile);
             _corrections = JsonSerializer.Deserialize<List<CorrectionEntry>>(json) ?? new();
         }
     }
 
     public void Save()
     {
-        var dir = Path.GetDirectoryName(Program.HotwordFile);
+        var dir = Path.GetDirectoryName(AppPaths.HotwordFile);
         if (dir != null) Directory.CreateDirectory(dir);
 
-        File.WriteAllText(Program.HotwordFile,
-            JsonSerializer.Serialize(new { hotwords = _hotwords }, new JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(AppPaths.HotwordFile,
+            JsonSerializer.Serialize(new { hotwords = _hotwords, sources = _hotwordSources }, new JsonSerializerOptions { WriteIndented = true }));
 
         // Keep last 500
         if (_corrections.Count > 500)
             _corrections = _corrections.TakeLast(500).ToList();
 
-        File.WriteAllText(Program.HistoryFile,
+        File.WriteAllText(AppPaths.HistoryFile,
             JsonSerializer.Serialize(_corrections, new JsonSerializerOptions { WriteIndented = true }));
     }
 
@@ -83,6 +98,8 @@ public class HotwordManager
             else
                 _hotwords[clean] = 20;
 
+            if (!_hotwordSources.ContainsKey(clean))
+                _hotwordSources[clean] = "learned";
             newWords.Add(clean);
         }
 
@@ -110,12 +127,14 @@ public class HotwordManager
             _hotwords[word] = Math.Max(_hotwords[word], weight);
         else
             _hotwords[word] = weight;
+        _hotwordSources[word] = "manual";
         Save();
     }
 
     public void Remove(string word)
     {
         _hotwords.Remove(word);
+        _hotwordSources.Remove(word);
         Save();
     }
 

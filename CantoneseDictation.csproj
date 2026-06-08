@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>true</SelfContained>
+    <SelfContained Condition="'$(ExcludeEntryPoint)' != 'true'">true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <ApplicationTitle>廣東話聽寫測試</ApplicationTitle>
@@ -20,6 +20,17 @@
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.21.0" />
     <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
+
+  <!-- When referenced as a library (e.g. by TestRunner), exclude the UI entry point -->
+  <ItemGroup Condition="'$(ExcludeEntryPoint)' == 'true'">
+    <Compile Remove="Program.cs" />
+    <Compile Remove="MainForm.cs" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(ExcludeEntryPoint)' == 'true'">
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+  </PropertyGroup>
 
   <ItemGroup>
     <None Update="model_quant.onnx">

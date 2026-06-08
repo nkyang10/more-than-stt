@@ -43,8 +43,14 @@ public class SenseVoiceEngine : IDisposable
         var modelPath = Path.Combine(_baseDir, "model_quant.onnx");
         var tokensPath = Path.Combine(_baseDir, "tokens.txt");
 
+        // Fallback: check AppData location
         if (!File.Exists(modelPath))
-            throw new FileNotFoundException($"ONNX model not found: {modelPath}");
+            modelPath = AppPaths.ModelDir;
+        if (!File.Exists(tokensPath))
+            tokensPath = Path.Combine(AppPaths.AppDir, "tokens.txt");
+
+        if (!File.Exists(modelPath))
+            throw new FileNotFoundException($"ONNX model not found in {_baseDir} or {AppPaths.AppDir}");
 
         // Load tokens
         _tokens = File.ReadAllLines(tokensPath).Select(l => l.Trim()).ToList();
@@ -60,19 +66,20 @@ public class SenseVoiceEngine : IDisposable
         _hanningWindow = CreateHanningWindow();
     }
 
-    public SenseVoiceResult Transcribe(string audioPath, string language = "auto")
+    public SenseVoiceResult Transcribe(string audioPath, string language = "auto",
+        IReadOnlyDictionary<string, int>? hotwords = null)
     {
         if (_session == null) throw new InvalidOperationException("Model not loaded");
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        AppLogger.Info($"Transcribe start: {audioPath}, lang={language}");
+        AppLogger.Info($"Transcribe start: {audioPath}, lang={language}, hotwords={(hotwords != null ? hotwords.Count : 0)}");
 
         // 1. Load & resample audio to 16kHz mono
         var samples = LoadAudioMono16k(audioPath);
         AppLogger.Info($"Audio loaded: {samples.Length} samples ({samples.Length / 16000.0:F2}s)");
 
-        if (samples.Length < 1600) // less than 100ms
+        if (samples.Length < 1600)
         {
             AppLogger.Warn($"Audio too short: {samples.Length} samples (<100ms)");
             sw.Stop();
@@ -108,9 +115,10 @@ public class SenseVoiceEngine : IDisposable
         var logits = results[0].AsTensor<float>();
         AppLogger.Info($"ONNX output shape: [{string.Join(", ", Enumerable.Range(0, logits.Dimensions.Length).Select(i => logits.Dimensions[i]))}]");
 
-        // Log top-3 tokens at 5 probe points
         int maxT = logits.Dimensions[1];
         int vocab = logits.Dimensions[2];
+
+        // Log top-3 tokens at 5 probe points
         int step = Math.Max(1, maxT / 5);
         for (int probe = 0; probe < maxT; probe += step)
         {
@@ -123,8 +131,28 @@ public class SenseVoiceEngine : IDisposable
             AppLogger.Info($"  Logits[t={probe}]: {string.Join(", ", top3)}");
         }
 
-        // 5. CTC decode
-        var text = GreedyCtcDecode(logits);
+        // 5. Pre-compute hotword token IDs for biasing
+        HashSet<int>? hotwordTokenIds = null;
+        if (hotwords != null && hotwords.Count > 0)
+        {
+            hotwordTokenIds = ComputeHotwordTokenIds(hotwords);
+            AppLogger.Info($"Hotword token IDs: {hotwordTokenIds.Count} unique tokens mapped from {hotwords.Count} hotwords");
+        }
+
+        // 6. CTC decode with optional hotword biasing
+        var text = GreedyCtcDecode(logits, hotwordTokenIds);
+
+        // 7. Post-process with hotword fuzzy matching
+        if (hotwords != null && hotwords.Count > 0 && !string.IsNullOrEmpty(text))
+        {
+            var postProcessed = ApplyHotwordPostProcessing(text, hotwords);
+            if (postProcessed != text)
+            {
+                AppLogger.Info($"Hotword post-processing: \"{text}\" -> \"{postProcessed}\"");
+                text = postProcessed;
+            }
+        }
+
         AppLogger.Info($"Decoded text ({text.Length} chars): \"{text}\"");
 
         sw.Stop();
@@ -135,41 +163,56 @@ public class SenseVoiceEngine : IDisposable
     private float[] LoadAudioMono16k(string path)
     {
         using var reader = new AudioFileReader(path);
-        var buffer = new List<float>();
+        var mono = new List<float>();
+        var readBuf = new float[reader.WaveFormat.SampleRate * reader.WaveFormat.Channels];
+        int read;
+        while ((read = reader.Read(readBuf, 0, readBuf.Length)) > 0)
+            for (int i = 0; i < read; i += reader.WaveFormat.Channels)
+                mono.Add(readBuf[i]);
 
-        // If not 16kHz, we need to resample
-        if (reader.WaveFormat.SampleRate != SampleRate || reader.WaveFormat.Channels != 1)
+        var srcRate = reader.WaveFormat.SampleRate;
+        if (srcRate == SampleRate)
+            return mono.ToArray();
+
+        // Resample using linear interpolation
+        double ratio = (double)srcRate / SampleRate;
+        int outLen = (int)(mono.Count / ratio);
+        var output = new float[outLen];
+
+        if (ratio > 1.0) // Downsample: apply simple moving average filter first
         {
-            // Read all, resample manually
-            var allSamples = new List<float>();
-            var readBuf = new float[reader.WaveFormat.SampleRate * reader.WaveFormat.Channels];
-            int read;
-            while ((read = reader.Read(readBuf, 0, readBuf.Length)) > 0)
-                for (int i = 0; i < read; i += reader.WaveFormat.Channels)
-                    allSamples.Add(readBuf[i]);
-
-            // Simple downsampling (keep every Nth sample)
-            if (reader.WaveFormat.SampleRate > SampleRate)
+            int winSize = (int)Math.Ceiling(ratio);
+            var filtered = new float[mono.Count];
+            for (int i = 0; i < mono.Count; i++)
             {
-                int ratio = reader.WaveFormat.SampleRate / SampleRate;
-                for (int i = 0; i < allSamples.Count; i += ratio)
-                    buffer.Add(allSamples[i]);
+                float sum = 0; int count = 0;
+                for (int j = Math.Max(0, i - winSize / 2); j <= Math.Min(mono.Count - 1, i + winSize / 2); j++)
+                { sum += mono[j]; count++; }
+                filtered[i] = sum / count;
             }
-            else
+
+            for (int i = 0; i < outLen; i++)
             {
-                buffer = allSamples;
+                double srcIdx = i * ratio;
+                int lo = (int)srcIdx;
+                int hi = Math.Min(lo + 1, filtered.Length - 1);
+                double frac = srcIdx - lo;
+                output[i] = (float)(filtered[lo] * (1 - frac) + filtered[hi] * frac);
             }
         }
-        else
+        else // Upsample
         {
-            var readBuf = new float[4096];
-            int read;
-            while ((read = reader.Read(readBuf, 0, readBuf.Length)) > 0)
-                for (int i = 0; i < read; i++)
-                    buffer.Add(readBuf[i]);
+            for (int i = 0; i < outLen; i++)
+            {
+                double srcIdx = i * ratio;
+                int lo = (int)srcIdx;
+                int hi = Math.Min(lo + 1, mono.Count - 1);
+                double frac = srcIdx - lo;
+                output[i] = (float)(mono[lo] * (1 - frac) + mono[hi] * frac);
+            }
         }
 
-        return buffer.ToArray();
+        return output;
     }
 
     private float[,] CreateMelFilterbank()
@@ -306,12 +349,13 @@ public class SenseVoiceEngine : IDisposable
         return result;
     }
 
-    private string GreedyCtcDecode(Tensor<float> logits)
+    private string GreedyCtcDecode(Tensor<float> logits, HashSet<int>? hotwordTokenIds = null)
     {
         if (_tokens == null) return "";
 
         int maxTime = logits.Dimensions[1];
         int vocabSize = logits.Dimensions[2];
+        const float hotwordBoost = 2.5f;
 
         var decoded = new List<int>();
         int prev = -1;
@@ -322,9 +366,12 @@ public class SenseVoiceEngine : IDisposable
             float bestScore = float.MinValue;
             for (int v = 0; v < vocabSize; v++)
             {
-                if (logits[0, t, v] > bestScore)
+                var score = logits[0, t, v];
+                if (hotwordTokenIds != null && hotwordTokenIds.Contains(v))
+                    score += hotwordBoost;
+                if (score > bestScore)
                 {
-                    bestScore = logits[0, t, v];
+                    bestScore = score;
                     best = v;
                 }
             }
@@ -347,6 +394,86 @@ public class SenseVoiceEngine : IDisposable
 
         text = string.Join(" ", text.Split(' ', StringSplitOptions.RemoveEmptyEntries));
         return text.Trim();
+    }
+
+    private HashSet<int> ComputeHotwordTokenIds(IReadOnlyDictionary<string, int> hotwords)
+    {
+        if (_tokens == null) return new HashSet<int>();
+
+        var ids = new HashSet<int>();
+        foreach (var word in hotwords.Keys)
+        {
+            if (string.IsNullOrEmpty(word) || word.Length < 2) continue;
+            var lower = word.ToLowerInvariant();
+            for (int i = 0; i < _tokens.Count; i++)
+            {
+                var t = _tokens[i];
+                if (t.Length < 2) continue;
+                var clean = t.Replace("▁", "").ToLowerInvariant();
+                if (clean.Length >= 2 && lower.Contains(clean))
+                    ids.Add(i);
+            }
+        }
+        return ids;
+    }
+
+    private string ApplyHotwordPostProcessing(string text, IReadOnlyDictionary<string, int> hotwords)
+    {
+        var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+        if (words.Count == 0) return text;
+
+        bool changed = false;
+        foreach (var (hotword, _) in hotwords.OrderByDescending(kv => kv.Value))
+        {
+            if (string.IsNullOrEmpty(hotword) || hotword.Length < 2) continue;
+
+            var hwLower = hotword.ToLowerInvariant();
+            var hwClean = hotword.Trim();
+
+            // Try matching as a single multi-word phrase
+            var joined = string.Join(" ", words).ToLowerInvariant();
+            if (joined.Contains(hwLower))
+            {
+                int idx = joined.IndexOf(hwLower);
+                int wordStart = joined[..idx].Count(c => c == ' ');
+                int wordEnd = wordStart + hwLower.Count(c => c == ' ') + 1;
+                for (int i = wordStart; i < wordEnd && i < words.Count; i++)
+                {
+                    words[i] = "";
+                }
+                words[wordStart] = hwClean;
+                changed = true;
+                continue;
+            }
+
+            // Try word-by-word fuzzy matching using character overlap
+            for (int i = 0; i < words.Count; i++)
+            {
+                var w = words[i].Trim(".,!?，。！？、；：\"''（）()「」【】".ToCharArray());
+                if (string.IsNullOrEmpty(w) || w.Length < 2) continue;
+
+                var wLower = w.ToLowerInvariant();
+
+                // Direct match
+                if (wLower == hwLower)
+                {
+                    words[i] = hwClean;
+                    changed = true;
+                    continue;
+                }
+
+                // Check if hotword is a compound (e.g. "ComfyUI" -> "comfy" + "ui")
+                if (hwLower.Contains(wLower) && hwLower.Length > wLower.Length + 2)
+                {
+                    words[i] = hwClean;
+                    changed = true;
+                }
+            }
+        }
+
+        if (!changed) return text;
+        var result = string.Join(" ", words.Where(w => !string.IsNullOrEmpty(w)));
+        return string.Join(" ", result.Split(' ', StringSplitOptions.RemoveEmptyEntries));
     }
 
     public void Dispose() => _session?.Dispose();

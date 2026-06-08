@@ -3,6 +3,7 @@ bin/
 obj/
 dist/
 publish/
+release/
 *.zip
 
 ## Model files (download separately - see docs/MODEL_SETUP.md)
