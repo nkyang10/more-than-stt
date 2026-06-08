@@ -174,33 +174,18 @@ public class SenseVoiceEngine : IDisposable
         if (srcRate == SampleRate)
             return mono.ToArray();
 
-        // Resample using linear interpolation
+        // Resample using nearest-neighbor decimation (original approach)
         double ratio = (double)srcRate / SampleRate;
         int outLen = (int)(mono.Count / ratio);
         var output = new float[outLen];
 
-        if (ratio > 1.0) // Downsample: apply simple moving average filter first
+        if (ratio >= 1.0) // Downsample
         {
-            int winSize = (int)Math.Ceiling(ratio);
-            var filtered = new float[mono.Count];
-            for (int i = 0; i < mono.Count; i++)
-            {
-                float sum = 0; int count = 0;
-                for (int j = Math.Max(0, i - winSize / 2); j <= Math.Min(mono.Count - 1, i + winSize / 2); j++)
-                { sum += mono[j]; count++; }
-                filtered[i] = sum / count;
-            }
-
-            for (int i = 0; i < outLen; i++)
-            {
-                double srcIdx = i * ratio;
-                int lo = (int)srcIdx;
-                int hi = Math.Min(lo + 1, filtered.Length - 1);
-                double frac = srcIdx - lo;
-                output[i] = (float)(filtered[lo] * (1 - frac) + filtered[hi] * frac);
-            }
+            int step = (int)Math.Round(ratio);
+            for (int i = 0; i < outLen && i * step < mono.Count; i++)
+                output[i] = mono[i * step];
         }
-        else // Upsample
+        else // Upsample with linear interpolation
         {
             for (int i = 0; i < outLen; i++)
             {
@@ -223,9 +208,13 @@ public class SenseVoiceEngine : IDisposable
         double melMin = 2595 * Math.Log10(1 + fMin / 700);
         double melMax = 2595 * Math.Log10(1 + fMax / 700);
 
+        // Mel-spaced center frequencies
         var melPoints = new double[NumMels + 2];
         for (int i = 0; i < NumMels + 2; i++)
-            melPoints[i] = fMin + (fMax - fMin) * i / (NumMels + 1);
+        {
+            double mel = melMin + (melMax - melMin) * i / (NumMels + 1);
+            melPoints[i] = 700 * (Math.Pow(10, mel / 2595) - 1);
+        }
 
         var fftFreqs = new double[FftSize / 2 + 1];
         for (int i = 0; i <= FftSize / 2; i++)
