@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -17,7 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.2" />
+    
   </ItemGroup>
   <Target Name="CleanReferencedProjectObj" BeforeTargets="BeforeBuild">
     <RemoveDir Directories="..\obj\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)" />
