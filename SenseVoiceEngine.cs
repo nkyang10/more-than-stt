@@ -32,6 +32,8 @@ public class SenseVoiceEngine : IDisposable
     // Pre-computed mel filterbank
     private float[,]? _melBasis;
     private float[]? _hanningWindow;
+    private float[]? _amShift;    // global mean shift (from am.mvn)
+    private float[]? _amScale;    // global scale (from am.mvn)
 
     public SenseVoiceEngine(string baseDir)
     {
@@ -64,6 +66,31 @@ public class SenseVoiceEngine : IDisposable
         // Pre-compute mel filterbank
         _melBasis = CreateMelFilterbank();
         _hanningWindow = CreateHanningWindow();
+
+        // Load global normalization from am.mvn (Kaldi nnet format)
+        var amPath = Path.Combine(_baseDir, "am.mvn");
+        if (!File.Exists(amPath))
+            amPath = Path.Combine(AppPaths.AppDir, "am.mvn");
+        if (File.Exists(amPath))
+        {
+            var text = File.ReadAllText(amPath);
+            // Match: <AddShift> DIM DIM \n <LearnRateCoef> 0 [ values ]
+            var shiftMatch = System.Text.RegularExpressions.Regex.Match(text,
+                @"<AddShift>\s+\d+\s+\d+\s+<LearnRateCoef>\s+\d+\s*\[([^\]]+)\]");
+            if (shiftMatch.Success)
+            {
+                var parts = shiftMatch.Groups[1].Value.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+                _amShift = parts.Select(float.Parse).ToArray();
+            }
+            var scaleMatch = System.Text.RegularExpressions.Regex.Match(text,
+                @"<Rescale>\s+\d+\s+\d+\s+<LearnRateCoef>\s+\d+\s*\[([^\]]+)\]");
+            if (scaleMatch.Success)
+            {
+                var parts = scaleMatch.Groups[1].Value.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+                _amScale = parts.Select(float.Parse).ToArray();
+            }
+            AppLogger.Info($"am.mvn loaded: shift={_amShift?.Length ?? 0}, scale={_amScale?.Length ?? 0}");
+        }
     }
 
     public SenseVoiceResult Transcribe(string audioPath, string language = "auto",
@@ -93,7 +120,15 @@ public class SenseVoiceEngine : IDisposable
         // 3. Stack frames
         var features = StackFrames(mels);
 
-        // 4. Run ONNX inference
+        // 4. Apply global mean-variance normalization from am.mvn
+        if (_amShift != null && _amScale != null && features.Count > 0)
+        {
+            for (int t = 0; t < features.Count; t++)
+                for (int f = 0; f < FeatDim && f < _amShift.Length && f < _amScale.Length; f++)
+                    features[t][f] = (features[t][f] + _amShift[f]) * _amScale[f];
+        }
+
+        // 5. Run ONNX inference
         int numFrames = features.Count;
         int langId = language switch { "zh" => 0, "en" => 1, "yue" => 2, "ja" => 3, "ko" => 4, _ => 2 };
         AppLogger.Info($"ONNX input: 1 x {numFrames} x {FeatDim} (speech_lengths={numFrames}, language={language}({langId}))");
@@ -131,7 +166,7 @@ public class SenseVoiceEngine : IDisposable
             AppLogger.Info($"  Logits[t={probe}]: {string.Join(", ", top3)}");
         }
 
-        // 5. Pre-compute hotword token IDs for biasing
+        // 6. Pre-compute hotword token IDs for biasing
         HashSet<int>? hotwordTokenIds = null;
         if (hotwords != null && hotwords.Count > 0)
         {
@@ -273,12 +308,6 @@ public class SenseVoiceEngine : IDisposable
                     sum += spectrum[k] * _melBasis[m, k];
                 mel[m] = (float)Math.Log(Math.Max(sum, 1e-10));
             }
-
-            // Simple mean-variance normalization
-            float mean = mel.Average();
-            float var = (float)Math.Sqrt(mel.Select(x => (x - mean) * (x - mean)).Average() + 1e-10);
-            for (int m = 0; m < NumMels; m++)
-                mel[m] = (mel[m] - mean) / var;
 
             mels.Add(mel);
         }
