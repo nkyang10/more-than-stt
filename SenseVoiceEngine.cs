@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using SherpaOnnx;
 
 namespace CantoneseDictation;
@@ -9,7 +10,6 @@ namespace CantoneseDictation;
 public class SenseVoiceResult
 {
     public string Text { get; set; } = "";
-    public string Language { get; set; } = "";
     public double TimeSeconds { get; set; }
 }
 
@@ -17,8 +17,10 @@ public class SenseVoiceEngine : IDisposable
 {
     private readonly string _baseDir;
     private OfflineRecognizer? _recognizer;
-    private string? _modelPath;
-    private string? _tokensPath;
+
+    private static readonly char[] TrimChars = ".,!?，。！？、；：\"''（）()「」【】".ToCharArray();
+    public static readonly string ModelDirName = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09";
+    private static readonly Regex SenseVoiceTagRegex = new(@"<\|[^|]+\|>", RegexOptions.Compiled);
     private static readonly string[] SupportedLanguages = { "auto", "zh", "en", "yue", "ja", "ko" };
 
     public SenseVoiceEngine(string baseDir)
@@ -28,53 +30,33 @@ public class SenseVoiceEngine : IDisposable
 
     public void Load()
     {
-        // Check for Sherpa-ONNX model first, then fallback to legacy model
-        var sherpaModelDir = Path.Combine(_baseDir, "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09");
-        _modelPath = Path.Combine(sherpaModelDir, "model.int8.onnx");
-        _tokensPath = Path.Combine(sherpaModelDir, "tokens.txt");
+        var sherpaModelDir = Path.Combine(_baseDir, ModelDirName);
+        var modelPath = Path.Combine(sherpaModelDir, "model.int8.onnx");
+        var tokensPath = Path.Combine(sherpaModelDir, "tokens.txt");
 
-        if (!File.Exists(_modelPath))
-        {
-            // Fallback: try older model
-            sherpaModelDir = Path.Combine(_baseDir, "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17");
-            _modelPath = Path.Combine(sherpaModelDir, "model.int8.onnx");
-            _tokensPath = Path.Combine(sherpaModelDir, "tokens.txt");
-        }
+        if (!File.Exists(modelPath))
+            throw new FileNotFoundException(
+                $"ONNX model not found. Download and extract {ModelDirName} from https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models");
 
-        if (!File.Exists(_modelPath))
-        {
-            // Fallback: try legacy model_quant.onnx (will use old method - not supported)
-            _modelPath = Path.Combine(_baseDir, "model_quant.onnx");
-            if (!File.Exists(_modelPath))
-                _modelPath = AppPaths.ModelDir;
-            _tokensPath = Path.Combine(_baseDir, "tokens.txt");
-            if (!File.Exists(_tokensPath))
-                _tokensPath = Path.Combine(AppPaths.AppDir, "tokens.txt");
-        }
-
-        if (!File.Exists(_modelPath))
-            throw new FileNotFoundException($"ONNX model not found. Place model.int8.onnx in {Path.Combine(_baseDir, "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09")} or download from https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models");
-
-        if (!File.Exists(_tokensPath))
+        if (!File.Exists(tokensPath))
             throw new FileNotFoundException($"tokens.txt not found next to model");
 
-        AppLogger.Info($"Sherpa-ONNX model: {_modelPath}");
-        AppLogger.Info($"Sherpa-ONNX tokens: {_tokensPath}");
+        AppLogger.Info($"Model: {modelPath}");
 
         var config = new OfflineRecognizerConfig();
         config.FeatConfig = new FeatureConfig { SampleRate = 16000, FeatureDim = 80 };
         config.ModelConfig = new OfflineModelConfig();
         config.ModelConfig.SenseVoice = new OfflineSenseVoiceModelConfig();
-        config.ModelConfig.SenseVoice.Model = _modelPath;
+        config.ModelConfig.SenseVoice.Model = modelPath;
         config.ModelConfig.SenseVoice.Language = "auto";
         config.ModelConfig.SenseVoice.UseInverseTextNormalization = 1;
-        config.ModelConfig.Tokens = _tokensPath;
+        config.ModelConfig.Tokens = tokensPath;
         config.ModelConfig.NumThreads = 2;
         config.ModelConfig.Debug = 0;
         config.DecodingMethod = "greedy_search";
 
         _recognizer = new OfflineRecognizer(config);
-        AppLogger.Info("Sherpa-ONNX recognizer created successfully");
+        AppLogger.Info("Recognizer created successfully");
     }
 
     public SenseVoiceResult Transcribe(string audioPath, string language = "auto",
@@ -85,20 +67,7 @@ public class SenseVoiceEngine : IDisposable
         var sw = System.Diagnostics.Stopwatch.StartNew();
         AppLogger.Info($"Transcribe: {audioPath}, lang={language}, hotwords={hotwords?.Count ?? 0}");
 
-        // Map language parameter to Sherpa-ONNX values
-        var lang = SupportedLanguages.Contains(language) ? language : "auto";
-
-        // Build hotwords file if needed
-        string? hotwordsFile = null;
-        if (hotwords != null && hotwords.Count > 0)
-        {
-            hotwordsFile = Path.GetTempFileName();
-            var lines = hotwords.OrderByDescending(kv => kv.Value)
-                .Select(kv => $"{kv.Key} {kv.Value}");
-            File.WriteAllLines(hotwordsFile, lines);
-        }
-
-        // Read audio using NAudio
+        // Read audio
         using var audio = new NAudio.Wave.AudioFileReader(audioPath);
         var samples = new List<float>();
         var buf = new float[8192];
@@ -108,67 +77,92 @@ public class SenseVoiceEngine : IDisposable
                 samples.Add(buf[i]);
 
         var srcRate = audio.WaveFormat.SampleRate;
-        double duration = samples.Count / (double)srcRate;
-        AppLogger.Info($"Audio: {samples.Count} samples @ {srcRate}Hz ({duration:F2}s)");
+        AppLogger.Info($"Audio: {samples.Count} samples @ {srcRate}Hz ({samples.Count / (double)srcRate:F2}s)");
 
         if (samples.Count < 1600)
         {
-            AppLogger.Warn($"Audio too short: {samples.Count} samples");
             sw.Stop();
-            CleanupHotwordsFile(hotwordsFile);
             return new SenseVoiceResult { Text = "", TimeSeconds = sw.Elapsed.TotalSeconds };
         }
 
-        var stream = _recognizer.CreateStream();
-        stream.AcceptWaveform(srcRate, samples.ToArray());
-
-        _recognizer.Decode(stream);
-
-        var result = stream.Result;
-        var text = result.Text?.Trim() ?? "";
-
-        // Sherpa-ONNX returns text with language prefix/suffix tokens - clean it
-        text = CleanSenseVoiceText(text);
-
-        sw.Stop();
-        AppLogger.Info($"Result ({text.Length} chars): \"{text}\" in {sw.Elapsed.TotalSeconds:F3}s");
-
-        stream.Dispose();
-        CleanupHotwordsFile(hotwordsFile);
-
-        return new SenseVoiceResult
+        OfflineStream? stream = null;
+        try
         {
-            Text = text,
-            TimeSeconds = sw.Elapsed.TotalSeconds
-        };
+            stream = _recognizer.CreateStream();
+            stream.AcceptWaveform(srcRate, samples.ToArray());
+            _recognizer.Decode(stream);
+
+            var text = CleanSenseVoiceText(stream.Result.Text ?? "");
+
+            // Apply hotword post-processing (SenseVoice only supports greedy_search)
+            if (hotwords != null && hotwords.Count > 0 && !string.IsNullOrEmpty(text))
+                text = ApplyHotwordPostProcessing(text, hotwords);
+
+            sw.Stop();
+            AppLogger.Info($"Result ({text.Length} chars): \"{text}\" in {sw.Elapsed.TotalSeconds:F3}s");
+
+            return new SenseVoiceResult
+            {
+                Text = text,
+                TimeSeconds = sw.Elapsed.TotalSeconds
+            };
+        }
+        finally
+        {
+            stream?.Dispose();
+        }
     }
 
     private static string CleanSenseVoiceText(string text)
     {
         if (string.IsNullOrEmpty(text)) return text;
-        // Remove common SenseVoice artifacts
-        return text
-            .Replace("<|nospeech|>", "")
-            .Replace("<|Speech|>", "")
-            .Replace("<|NEUTRAL|>", "")
-            .Replace("<|HAPPY|>", "")
-            .Replace("<|SAD|>", "")
-            .Replace("<|ANGRY|>", "")
-            .Replace("<|zh|>", "")
-            .Replace("<|en|>", "")
-            .Replace("<|yue|>", "")
-            .Replace("<|ja|>", "")
-            .Replace("<|ko|>", "")
-            .Replace("<|Event_UNK|>", "")
-            .Trim();
+        return SenseVoiceTagRegex.Replace(text, "").Trim();
     }
 
-    private static void CleanupHotwordsFile(string? path)
+    internal static string ApplyHotwordPostProcessing(string text, IReadOnlyDictionary<string, int> hotwords)
     {
-        if (path != null)
+        var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+        if (words.Count == 0) return text;
+
+        bool changed = false;
+        foreach (var (hotword, _) in hotwords.OrderByDescending(kv => kv.Value))
         {
-            try { File.Delete(path); } catch { }
+            if (string.IsNullOrEmpty(hotword) || hotword.Length < 2) continue;
+
+            var hwLower = hotword.ToLowerInvariant();
+            var hwClean = hotword.Trim();
+
+            // Try matching as a single multi-word phrase
+            var joined = string.Join(" ", words).ToLowerInvariant();
+            if (joined.Contains(hwLower))
+            {
+                int idx = joined.IndexOf(hwLower);
+                int wordStart = joined[..idx].Count(c => c == ' ');
+                int wordEnd = wordStart + hwLower.Count(c => c == ' ') + 1;
+                for (int i = wordStart; i < wordEnd && i < words.Count; i++)
+                    words[i] = "";
+                words[wordStart] = hwClean;
+                changed = true;
+                continue;
+            }
+
+            // Word-by-word matching
+            for (int i = 0; i < words.Count; i++)
+            {
+                var w = words[i].Trim(TrimChars);
+                if (string.IsNullOrEmpty(w) || w.Length < 2) continue;
+                var wLower = w.ToLowerInvariant();
+
+                if (wLower == hwLower || hwLower.Contains(wLower) && hwLower.Length > wLower.Length + 2)
+                {
+                    words[i] = hwClean;
+                    changed = true;
+                }
+            }
         }
+
+        if (!changed) return text;
+        return string.Join(" ", words.Where(w => !string.IsNullOrEmpty(w)).Select(w => w.Trim()));
     }
 
     public void Dispose() => _recognizer?.Dispose();

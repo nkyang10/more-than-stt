@@ -28,16 +28,18 @@
   </ItemGroup>
 
   <PropertyGroup Condition="'$(ExcludeEntryPoint)' == 'true'">
+    <OutputType>Library</OutputType>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
   </PropertyGroup>
 
-  <PropertyGroup>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
-  </PropertyGroup>
 
 
+  <!-- Exclude TestRunner project from default .cs glob -->
+  <ItemGroup>
+    <Compile Remove="TestRunner\**\*" />
+    <None Include="TestRunner\**\*" />
+  </ItemGroup>
 
   <!-- Copy Sherpa-ONNX model folder -->
   <ItemGroup>
@@ -45,5 +47,13 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <!-- Generate version.txt for auto-updater fallback -->
+  <ItemGroup>
+    <Content Include="version.txt" Condition="false" />
+  </ItemGroup>
+  <Target Name="GenerateVersionFile" AfterTargets="Publish">
+    <WriteLinesToFile File="$(PublishDir)\version.txt" Lines="$(Version)" Overwrite="true" />
+  </Target>
 
 </Project>

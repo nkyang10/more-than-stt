@@ -64,8 +64,18 @@ public static class AutoUpdater
     {
         get
         {
-            var ver = Assembly.GetExecutingAssembly().GetName().Version;
-            return ver != null ? $"{ver.Major}.{ver.Minor}.{ver.Build}" : "0.0.0";
+            try
+            {
+                var ver = Assembly.GetExecutingAssembly().GetName().Version;
+                if (ver != null && (ver.Major != 0 || ver.Minor != 0 || ver.Build != 0))
+                    return $"{ver.Major}.{ver.Minor}.{ver.Build}";
+            }
+            catch { }
+            // Fallback: read from version.txt shipped alongside the exe
+            var versionFile = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath) ?? ".", "version.txt");
+            if (File.Exists(versionFile))
+                return File.ReadAllText(versionFile).Trim();
+            return "1.0.0";
         }
     }
 
@@ -254,7 +264,7 @@ public static class AutoUpdater
             await RetryDeleteAsync(zipPath);
 
             // Copy non-exe files now (safe while running)
-            var allowedFiles = new[] { "CantoneseDictation.exe", "tokens.txt", "am.mvn", "README.txt" };
+            var allowedFiles = new[] { "CantoneseDictation.exe", "version.txt" };
             foreach (var f in allowedFiles)
             {
                 if (f == "CantoneseDictation.exe") continue; // exe handled by batch post-exit
@@ -264,6 +274,22 @@ public static class AutoUpdater
                     var dst = Path.Combine(baseDir, f);
                     File.Copy(src, dst, overwrite: true);
                     AppLogger.Info($"Updated: {f}");
+                }
+            }
+
+            // Update Sherpa-ONNX model folder if present in update
+            var updateModelDir = Path.Combine(updateDir, SenseVoiceEngine.ModelDirName);
+            if (Directory.Exists(updateModelDir))
+            {
+                var targetModelDir = Path.Combine(baseDir, SenseVoiceEngine.ModelDirName);
+                Directory.CreateDirectory(targetModelDir);
+                foreach (var srcFile in Directory.GetFiles(updateModelDir, "*", SearchOption.AllDirectories))
+                {
+                    var relPath = Path.GetRelativePath(updateModelDir, srcFile);
+                    var dst = Path.Combine(targetModelDir, relPath);
+                    Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+                    File.Copy(srcFile, dst, overwrite: true);
+                    AppLogger.Info($"Updated model: {relPath}");
                 }
             }
 

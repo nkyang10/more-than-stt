@@ -20,11 +20,13 @@ echo "Version from csproj: $CI_VER"
 echo "=== Packaging..."
 mkdir -p release_beta
 cp dist/CantoneseDictation.exe release_beta/
-cp tokens.txt release_beta/
-cp am.mvn release_beta/
+
+# Include model download instructions
 cat > release_beta/README.txt << 'EOF'
 CI/Beta build — for testing only
-Model file required separately (download from main release)
+Sherpa-ONNX SenseVoice model required separately:
+  https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2
+Extract sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/ into the app folder.
 EOF
 
 cd release_beta
@@ -41,7 +43,10 @@ git push origin --delete "$RELEASE_TAG" 2>/dev/null || true
 # Create new release with same tag
 gh release create "$RELEASE_TAG" \
   --title "CI Build $(date '+%Y-%m-%d %H:%M')" \
-  --notes "$VERSION_MSG" \
+  --notes "$VERSION_MSG
+
+Model required separately:
+  https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models" \
   "CantoneseDictation_beta.zip"
 
 echo ""

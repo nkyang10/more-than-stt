@@ -111,12 +111,13 @@ public class MainForm : Form
             ForeColor = FgWhite,
             Padding = new Point(10, 4)
         };
-        tabControl.SelectedIndexChanged += (s, e) => { if (tabControl.SelectedIndex == 3) RefreshStatsTab(); };
+        tabControl.SelectedIndexChanged += (s, e) => { if (tabControl.SelectedTab == _statsTab) RefreshStatsTab(); };
 
         var tab1 = new TabPage("🎤 Dictation") { BackColor = BgDark };
         var tab2 = new TabPage("📋 History") { BackColor = BgDark };
         var tab3 = new TabPage("📚 Hotwords") { BackColor = BgDark };
         var tab4 = new TabPage("⚙️ Stats") { BackColor = BgDark };
+        _statsTab = tab4;
 
         tabControl.TabPages.Add(tab1);
         tabControl.TabPages.Add(tab2);
@@ -134,7 +135,7 @@ public class MainForm : Form
         this.KeyPreview = true;
         this.KeyDown += (s, e) =>
         {
-            if (e.KeyCode == Keys.F5) ToggleRecording();
+            if (e.KeyCode == Keys.F5) { e.SuppressKeyPress = true; ToggleRecording(); }
             else if (e.Control && e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; LearnFromCorrection(null, EventArgs.Empty); }
             else if (e.Control && e.KeyCode == Keys.L) { e.SuppressKeyPress = true; _ = LoadAudioFile(); }
         };
@@ -599,6 +600,7 @@ public class MainForm : Form
     private RichTextBox _statsBox;
     private Label? _hotwordTabStatLabel;
     private TextBox? _hotwordFilterBox;
+    private TabPage? _statsTab;
 
     // ═══════════════════════════════════════════════════
     //  Actions
@@ -680,7 +682,7 @@ public class MainForm : Form
             AppLogger.Info($"Debug copy: {debugPath}");
 
             SetStatus("🧠 Transcribing...");
-            var result = _engine.Transcribe(tmpPath, lang, _hotwordMgr.Hotwords);
+            var result = await Task.Run(() => _engine!.Transcribe(tmpPath, lang, _hotwordMgr.Hotwords));
             File.Delete(tmpPath);
 
             if (string.IsNullOrEmpty(result.Text))
@@ -694,7 +696,7 @@ public class MainForm : Form
             else
             {
                 AppLogger.Info($"Result shown to user: \"{result.Text}\"");
-                ShowResult(result.Text, result.TimeSeconds, lang, "");
+                ShowResult(result.Text, result.TimeSeconds, lang);
             }
         }
         catch (Exception ex)
@@ -730,7 +732,7 @@ public class MainForm : Form
             var result = await Task.Run(() => _engine!.Transcribe(dlg.FileName, lang, _hotwordMgr.Hotwords));
             sw.Stop();
 
-            ShowResult(result.Text, result.TimeSeconds, lang, "");
+            ShowResult(result.Text, result.TimeSeconds, lang);
         }
         catch (Exception ex)
         {
@@ -738,7 +740,7 @@ public class MainForm : Form
         }
     }
 
-    private void ShowResult(string text, double seconds, string lang, string hotword)
+    private void ShowResult(string text, double seconds, string lang)
     {
         _lastAsrText = text;
         txtResult.Text = text;
@@ -746,8 +748,8 @@ public class MainForm : Form
 
         if (seconds > 0)
         {
-            var ratio = 7.7 / seconds;
-            lblTime.Text = $"⏱ {seconds:F3}s ({ratio:F0}x realtime) | lang: {lang}";
+            var ratio = seconds > 0 ? 7.7 / seconds : 0;
+            lblTime.Text = $"⏱ {seconds:F3}s{(ratio > 0 ? $" ({ratio:F0}x realtime)" : "")} | lang: {lang}";
         }
 
         var hwCount = _hotwordMgr.Hotwords.Count;
