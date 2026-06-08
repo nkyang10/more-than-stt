@@ -21,25 +21,25 @@ public class MainForm : Form
     private static readonly Color FgSubtle = Color.FromArgb(108, 112, 134);
 
     // ─── Controls ───
-    private Button btnRecord;
-    private Label statusLabel;
-    private RichTextBox txtResult;
-    private RichTextBox txtCorrection;
-    private Button btnLearn;
-    private Button btnLoadFile;
-    private Label lblTime;
-    private Label lblHotwordActive;
-    private ComboBox cmbLanguage;
-    private TabControl tabControl;
-    private ListView historyList;
-    private ListView hotwordList;
+    private Button btnRecord = null!;
+    private Label statusLabel = null!;
+    private RichTextBox txtResult = null!;
+    private RichTextBox txtCorrection = null!;
+    private Button btnLearn = null!;
+    private Button btnLoadFile = null!;
+    private Label lblTime = null!;
+    private Label lblHotwordActive = null!;
+    private ComboBox cmbLanguage = null!;
+    private TabControl tabControl = null!;
+    private ListView historyList = null!;
+    private ListView hotwordList = null!;
 
     // ─── State ───
     private HotwordManager _hotwordMgr = new();
     private SenseVoiceEngine? _engine = null;
     private bool _isRecording = false;
     private string _lastAsrText = "";
-    private float _micGain = 2.0f; // default 2x amplification
+    private float _micGain = 2.0f;
 
     public MainForm()
     {
@@ -597,7 +597,7 @@ public class MainForm : Form
         _statsBox = statsBox;
     }
 
-    private RichTextBox _statsBox;
+    private RichTextBox _statsBox = null!;
     private Label? _hotwordTabStatLabel;
     private TextBox? _hotwordFilterBox;
     private TabPage? _statsTab;
