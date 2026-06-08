@@ -32,6 +32,13 @@
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+  </PropertyGroup>
+
+
+
   <!-- Copy Sherpa-ONNX model folder -->
   <ItemGroup>
     <None Update="sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09\**\*">
