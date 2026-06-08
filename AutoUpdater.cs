@@ -147,7 +147,9 @@ public static class AutoUpdater
         try
         {
             var exeDir = Path.GetDirectoryName(Application.ExecutablePath) ?? ".";
-            var updateDir = Path.Combine(exeDir, ".update");
+            // SAFETY: All file ops must stay inside exeDir
+            var baseDir = Path.GetFullPath(exeDir);
+            var updateDir = Path.Combine(baseDir, ".update");
             if (Directory.Exists(updateDir))
             {
                 try { Directory.Delete(updateDir, true); }
@@ -178,10 +180,47 @@ public static class AutoUpdater
 
             AppLogger.Info($"Downloaded {readSoFar} bytes to {zipPath}");
 
-            // Extract zip
+            // Extract zip — SAFETY: reject any entry that escapes updateDir
             AppLogger.Info("Extracting update...");
-            ZipFile.ExtractToDirectory(zipPath, updateDir, overwriteFiles: true);
+            using (var archive = ZipFile.OpenRead(zipPath))
+            {
+                foreach (var entry in archive.Entries)
+                {
+                    var entryName = entry.FullName.Replace('/', '\\');
+                    if (entryName.Contains("..\\") || entryName.StartsWith("\\") || Path.IsPathRooted(entryName))
+                    {
+                        AppLogger.Warn($"Skipping unsafe zip entry: {entryName}");
+                        continue;
+                    }
+                    var destPath = Path.GetFullPath(Path.Combine(updateDir, entryName));
+                    if (!destPath.StartsWith(Path.GetFullPath(updateDir), StringComparison.OrdinalIgnoreCase))
+                    {
+                        AppLogger.Warn($"Skipping path traversal attempt: {entryName} -> {destPath}");
+                        continue;
+                    }
+                    if (entry.Name.Length == 0) continue;
+                    Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                    entry.ExtractToFile(destPath, overwrite: true);
+                }
+            }
             File.Delete(zipPath);
+
+            // SAFETY: Only copy EXPLICIT known filenames to baseDir (no wildcard)
+            var allowedFiles = new[] { "CantoneseDictation.exe", "tokens.txt", "am.mvn", "README.txt" };
+            // Copy non-exe files now (safe while running)
+            foreach (var f in allowedFiles)
+            {
+                if (f == "CantoneseDictation.exe") continue; // exe must be copied AFTER exit via batch
+                var src = Path.Combine(updateDir, f);
+                if (File.Exists(src))
+                {
+                    var dst = Path.Combine(baseDir, f);
+                    File.Copy(src, dst, overwrite: true);
+                    AppLogger.Info($"Updated: {f}");
+                }
+            }
+
+            // Write updater batch — ONLY copies the exe (other files already done)
 
             // Write xcopy exclude file
             File.WriteAllText(Path.Combine(updateDir, "_exclude.txt"), "model_quant.onnx\r\n");
@@ -221,8 +260,6 @@ public static class AutoUpdater
     private static string GetUpdaterBatchContent(int pid, string currentExe,
         string updateDir, string exeDir)
     {
-        // Use short paths (8.3 format) to avoid space issues
-        // Quote everything for safety
         return $@"
 @echo off
 title CantoneseDictation Updater
@@ -241,14 +278,11 @@ if not errorlevel 1 (
 )
 
 echo Old process exited.
-echo Copying new files...
+echo Copying new executable...
 echo.
 
-:: Copy new files, skip model_quant.onnx
-xcopy ""{updateDir}\CantoneseDictation.exe"" ""{exeDir}\"" /Y /Q >NUL 2>&1
-xcopy ""{updateDir}\tokens.txt"" ""{exeDir}\"" /Y /Q >NUL 2>&1
-if exist ""{updateDir}\am.mvn"" xcopy ""{updateDir}\am.mvn"" ""{exeDir}\"" /Y /Q >NUL 2>&1
-if exist ""{updateDir}\README.txt"" xcopy ""{updateDir}\README.txt"" ""{exeDir}\"" /Y /Q >NUL 2>&1
+:: Only copy CantoneseDictation.exe (other files already copied by app)
+copy /Y ""{updateDir}\CantoneseDictation.exe"" ""{currentExe}"" >NUL 2>&1
 
 :: Clean up
 echo Cleaning up...
@@ -260,7 +294,7 @@ echo.
 
 start """" ""{currentExe}""
 
-:: Self-delete this batch file
+:: Self-delete
 (goto) 2>&1 & del ""%~f0""
 ";
     }
