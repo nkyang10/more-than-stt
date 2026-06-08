@@ -13,7 +13,7 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <ApplicationTitle>廣東話聽寫測試</ApplicationTitle>
     <AssemblyName>CantoneseDictation</AssemblyName>
-    <Version>1.0.0.0</Version>
+    <Version Condition="'$(Version)' == ''">1.0.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -53,7 +53,14 @@
     <Content Include="version.txt" Condition="false" />
   </ItemGroup>
   <Target Name="GenerateVersionFile" AfterTargets="Publish">
-    <WriteLinesToFile File="$(PublishDir)\version.txt" Lines="$(Version)" Overwrite="true" />
+    <Exec Command="git describe --tags --dirty --always 2>nul" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitVersion" />
+    </Exec>
+    <PropertyGroup>
+      <AppVersion>$(GitVersion)</AppVersion>
+      <AppVersion Condition="'$(AppVersion)' == ''">$(Version)</AppVersion>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(PublishDir)\version.txt" Lines="$(AppVersion)" Overwrite="true" />
   </Target>
 
 </Project>
