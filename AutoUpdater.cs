@@ -71,9 +71,11 @@ public static class AutoUpdater
             var current = new Version(CurrentVersion);
             var latest = Version.TryParse(tag, out var parsed) ? parsed : new Version(0, 0, 0);
 
-            // Find zip asset
+            // Find zip asset — prefer the app zip (not sensevoice_model)
             var zipAsset = Array.Find(release.assets, a =>
-                a.name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+                a.name.StartsWith("CantoneseDictation") && a.name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                ?? Array.Find(release.assets, a =>
+                    a.name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
 
             return new UpdateInfo
             {
@@ -93,6 +95,7 @@ public static class AutoUpdater
     /// <summary>
     /// Download update zip, extract, and launch updater batch file.
     /// The batch waits for this process to exit, copies new files, then restarts.
+    /// Model file (model_quant.onnx) is excluded from copy — users download separately.
     /// </summary>
     public static async Task<bool> DownloadAndInstall(UpdateInfo info, IWin32Window owner)
     {
@@ -138,8 +141,8 @@ public static class AutoUpdater
             ZipFile.ExtractToDirectory(zipPath, updateDir, overwriteFiles: true);
             File.Delete(zipPath);
 
-            // Find the publish folder or exe inside the extracted zip
-            var updateFiles = Directory.GetFileSystemEntries(updateDir, "*", SearchOption.AllDirectories);
+            // Write xcopy exclude file to skip model
+            File.WriteAllText(Path.Combine(updateDir, "_exclude.txt"), "model_quant.onnx\r\n");
 
             // Write updater batch file
             var currentPid = Environment.ProcessId;
@@ -186,17 +189,22 @@ if not errorlevel 1 (
     goto wait
 )
 
-echo Old process exited. Copying new files...
-xcopy /E /Y ""{updateDir}\*"" ""{exeDir}\"" >NUL 2>&1
+echo Old process exited. Copying new files (skipping model_quant.onnx)...
+:: Copy everything except the model file (users download it separately)
+xcopy /E /Y /EXCLUDE:""{updateDir}\_exclude.txt"" ""{updateDir}\*"" ""{exeDir}\"" >NUL 2>&1
 
 :: Clean up
 rmdir /S /Q ""{updateDir}"" 2>NUL
 
 echo Starting updated version...
-start """" ""{currentExe}""
+start /B "" ""{currentExe}""
 
-:: Self-delete
-del ""%~f0""
-";
+:: Self-delete with retry
+:del_retry
+del ""%~f0"" 2>NUL
+if exist ""%~f0"" (
+    timeout /t 1 /nobreak >NUL
+    goto del_retry
+)";
     }
 }
