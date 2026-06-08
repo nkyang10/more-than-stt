@@ -63,7 +63,7 @@ public class MainForm : Form
             AppLogger.Error("Failed to load model", ex);
             MessageBox.Show($"Failed to load model: {ex.Message}");
         }
-        this.Text = "廣東話聽寫測試 v1.0 — SenseVoice + 自作學習";
+        this.Text = $"廣東話聽寫測試 {AutoUpdater.CurrentVersion} — Sherpa-ONNX";
         this.Size = new Size(1100, 750);
         this.MinimumSize = new Size(900, 600);
         this.StartPosition = FormStartPosition.CenterScreen;
@@ -842,7 +842,7 @@ public class MainForm : Form
     {
         var stats = _hotwordMgr.GetStats();
         statusLabel.Text = $"🧠 {stats.totalHotwords} words | 📋 {stats.totalCorrections} corrections";
-        this.Text = $"廣東話聽寫測試 v1.0 — {stats.totalHotwords} hotwords, {stats.totalCorrections} corrections";
+        this.Text = $"廣東話聽寫測試 {AutoUpdater.CurrentVersion} — {stats.totalHotwords} hotwords, {stats.totalCorrections} corrections";
     }
 
     private void SetStatus(string msg, bool isError = false)

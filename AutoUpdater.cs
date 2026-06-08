@@ -213,34 +213,37 @@ public static class AutoUpdater
     {
         if (string.IsNullOrEmpty(info.DownloadUrl))
         {
+            AppLogger.Warn("DownloadAndInstall: no download URL");
             MessageBox.Show(owner, "No download URL found in the latest release!", "Update Error",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
         }
+
+        AppLogger.Info($"DownloadAndInstall: version={info.Version}, url={info.DownloadUrl}");
 
         try
         {
             var exeDir = Path.GetDirectoryName(Application.ExecutablePath) ?? ".";
             var baseDir = Path.GetFullPath(exeDir);
             var updateDir = Path.Combine(baseDir, ".update");
+            AppLogger.Info($"Update dir: {updateDir}");
 
             // Fresh start
             if (Directory.Exists(updateDir))
             {
                 try { Directory.Delete(updateDir, true); }
-                catch { }
+                catch { AppLogger.Warn("Could not delete old update dir"); }
             }
             Directory.CreateDirectory(updateDir);
 
             var zipPath = Path.Combine(updateDir, "update.zip");
-
-            AppLogger.Info($"Downloading update from: {info.DownloadUrl}");
+            AppLogger.Info($"Downloading to: {zipPath}");
 
             // Download
             using var resp = await _http.GetAsync(info.DownloadUrl, HttpCompletionOption.ResponseHeadersRead);
             resp.EnsureSuccessStatusCode();
+            AppLogger.Info($"Download response OK, size={resp.Content.Headers.ContentLength ?? -1}");
 
-            var totalBytes = resp.Content.Headers.ContentLength ?? -1;
             using var contentStream = await resp.Content.ReadAsStreamAsync();
             using var fileStream = File.Create(zipPath);
 
@@ -252,11 +255,11 @@ public static class AutoUpdater
                 await fileStream.WriteAsync(buffer, 0, bytesRead);
                 readSoFar += bytesRead;
             }
+            AppLogger.Info($"Downloaded {readSoFar} bytes");
 
-            AppLogger.Info($"Downloaded {readSoFar} bytes to {zipPath}");
-
-            // Extract zip — SAFETY: reject path traversal
-            AppLogger.Info("Extracting update...");
+            // Extract zip
+            AppLogger.Info("Extracting update zip...");
+            int extractedCount = 0;
             using (var archive = ZipFile.OpenRead(zipPath))
             {
                 foreach (var entry in archive.Entries)
@@ -270,24 +273,25 @@ public static class AutoUpdater
                     var destPath = Path.GetFullPath(Path.Combine(updateDir, entryName));
                     if (!destPath.StartsWith(Path.GetFullPath(updateDir), StringComparison.OrdinalIgnoreCase))
                     {
-                        AppLogger.Warn($"Skipping path traversal attempt: {entryName} -> {destPath}");
+                        AppLogger.Warn($"Skipping path traversal: {entryName} -> {destPath}");
                         continue;
                     }
                     if (entry.Name.Length == 0) continue;
                     Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
                     entry.ExtractToFile(destPath, overwrite: true);
+                    extractedCount++;
                 }
             }
+            AppLogger.Info($"Extracted {extractedCount} files");
 
-            // Retry delete zip (Windows Defender may hold a lock)
-            AppLogger.Info("Deleting update.zip...");
+            // Delete zip
             await RetryDeleteAsync(zipPath);
 
-            // Copy non-exe files now (safe while running)
+            // Copy non-exe files
             var allowedFiles = new[] { "CantoneseDictation.exe", "version.txt" };
             foreach (var f in allowedFiles)
             {
-                if (f == "CantoneseDictation.exe") continue; // exe handled by batch post-exit
+                if (f == "CantoneseDictation.exe") continue;
                 var src = Path.Combine(updateDir, f);
                 if (File.Exists(src))
                 {
@@ -295,12 +299,17 @@ public static class AutoUpdater
                     File.Copy(src, dst, overwrite: true);
                     AppLogger.Info($"Updated: {f}");
                 }
+                else
+                {
+                    AppLogger.Warn($"File not found in update: {f}");
+                }
             }
 
-            // Update Sherpa-ONNX model folder if present in update
+            // Update model folder if present
             var updateModelDir = Path.Combine(updateDir, SenseVoiceEngine.ModelDirName);
             if (Directory.Exists(updateModelDir))
             {
+                AppLogger.Info("Updating model folder...");
                 var targetModelDir = Path.Combine(baseDir, SenseVoiceEngine.ModelDirName);
                 Directory.CreateDirectory(targetModelDir);
                 foreach (var srcFile in Directory.GetFiles(updateModelDir, "*", SearchOption.AllDirectories))
@@ -309,8 +318,8 @@ public static class AutoUpdater
                     var dst = Path.Combine(targetModelDir, relPath);
                     Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
                     File.Copy(srcFile, dst, overwrite: true);
-                    AppLogger.Info($"Updated model: {relPath}");
                 }
+                AppLogger.Info("Model folder updated");
             }
 
             // Write updater batch
@@ -319,25 +328,28 @@ public static class AutoUpdater
             var updaterPath = Path.Combine(updateDir, "updater.bat");
             var batchContent = GetUpdaterBatchContent(currentPid, currentExe, updateDir, exeDir);
             File.WriteAllText(updaterPath, batchContent);
+            AppLogger.Info($"Updater batch written: {updaterPath}");
 
             // Save pending marker
             File.WriteAllText(PendingMarkerPath, info.Version);
+            AppLogger.Info($"Pending marker saved: {PendingMarkerPath}");
 
-            AppLogger.Info("Update downloaded and ready to apply");
+            AppLogger.Info("Update ready — prompting user to restart");
+            SetStatusMsg?.Invoke("Update ready");
 
-            // Ask user to restart now or later
+            // Ask user to restart (show as task dialog to ensure it's on top)
             var msg = $"Update {info.Version} has been downloaded!\n\nRestart to apply the update?";
             var restart = MessageBox.Show(owner, msg, "Update Ready",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question);
 
+            AppLogger.Info($"User response: {(restart == DialogResult.Yes ? "Restart now" : "Later")}");
+
             if (restart == DialogResult.Yes)
             {
-                AppLogger.Info("User chose to restart now");
                 ApplyPendingUpdate();
             }
             else
             {
-                AppLogger.Info("User chose Later — pending marker saved");
                 SetStatusMsg?.Invoke("Update ready — click Update to restart");
             }
 
@@ -345,7 +357,7 @@ public static class AutoUpdater
         }
         catch (Exception ex)
         {
-            AppLogger.Error("Update download failed", ex);
+            AppLogger.Error("DownloadAndInstall failed", ex);
             MessageBox.Show(owner, $"Update failed: {ex.Message}\n\nCheck the log file for details.",
                 "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
