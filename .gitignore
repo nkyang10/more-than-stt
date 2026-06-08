@@ -1,0 +1,26 @@
+## Build outputs
+bin/
+obj/
+dist/
+publish/
+*.zip
+
+## Model files (download separately - see docs/MODEL_SETUP.md)
+model_quant.onnx
+tokens.txt
+am.mvn
+
+## IDE
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+## Windows
+Thumbs.db
+desktop.ini
+
+## Runtime
+*.log
+last_recording_*.wav
