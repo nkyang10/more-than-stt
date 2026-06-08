@@ -883,14 +883,14 @@ public class MainForm : Form
 
         if (!info.IsNewer)
         {
-            SetStatus($"✅ You're up to date (v{AutoUpdater.CurrentVersion})");
-            MessageBox.Show($"You're on the latest version (v{AutoUpdater.CurrentVersion}).",
+            SetStatus($"✅ You're up to date ({AutoUpdater.CurrentVersion})");
+            MessageBox.Show($"You're on the latest version ({AutoUpdater.CurrentVersion}).",
                 "Up to Date", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
         var result = MessageBox.Show(
-            $"New version available: {info.Version}\n\n{info.ReleaseNotes}\n\nCurrent: v{AutoUpdater.CurrentVersion}\n\nDownload & install?",
+            $"New version available: {info.Version}\n\n{info.ReleaseNotes}\n\nCurrent: {AutoUpdater.CurrentVersion}\n\nDownload & install?",
             "Update Available",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Question);
