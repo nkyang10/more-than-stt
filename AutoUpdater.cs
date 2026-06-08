@@ -44,6 +44,22 @@ public static class AutoUpdater
 
     public static bool UseBetaChannel { get; set; } = false;
 
+    /// <summary>Callback to set status text on the UI.</summary>
+    public static Action<string>? SetStatusMsg { get; set; }
+
+    /// <summary>Path to a marker file that signals a pending update.</summary>
+    private static string PendingMarkerPath
+    {
+        get
+        {
+            var dir = Path.GetDirectoryName(Application.ExecutablePath) ?? ".";
+            return Path.Combine(dir, ".update", "pending.txt");
+        }
+    }
+
+    /// <summary>True if an update was downloaded and is ready to apply.</summary>
+    public static bool IsUpdatePending => File.Exists(PendingMarkerPath);
+
     public static string CurrentVersion
     {
         get
@@ -51,6 +67,35 @@ public static class AutoUpdater
             var ver = Assembly.GetExecutingAssembly().GetName().Version;
             return ver != null ? $"{ver.Major}.{ver.Minor}.{ver.Build}" : "0.0.0";
         }
+    }
+
+    /// <summary>
+    /// Apply a pending update: launch the updater batch and exit.
+    /// Call this when the user clicks "Restart now".
+    /// </summary>
+    public static void ApplyPendingUpdate()
+    {
+        var exeDir = Path.GetDirectoryName(Application.ExecutablePath) ?? ".";
+        var baseDir = Path.GetFullPath(exeDir);
+        var updateDir = Path.Combine(baseDir, ".update");
+        var updaterPath = Path.Combine(updateDir, "updater.bat");
+
+        if (!File.Exists(updaterPath))
+        {
+            MessageBox.Show("Update files not found. Please check for updates again.",
+                "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        AppLogger.Info("Applying pending update...");
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = updaterPath,
+            WindowStyle = ProcessWindowStyle.Normal,
+            CreateNoWindow = false,
+            UseShellExecute = true
+        });
+        Application.Exit();
     }
 
     /// <summary>Check GitHub for latest release. Returns null on error.</summary>
@@ -96,20 +141,18 @@ public static class AutoUpdater
 
             AppLogger.Info($"Update asset: {zipAsset.name} ({zipAsset.browser_download_url})");
 
-            // ─── Version comparison ───
+            // Version comparison
             bool isNewer = false;
             string displayVersion = release.tag_name;
 
             if (UseBetaChannel)
             {
-                // Beta channel: always consider CI build newer if we found assets
                 isNewer = true;
                 displayVersion = $"CI Build ({release.created_at})";
-                AppLogger.Info($"Beta channel: always showing update (tag=ci, created={release.created_at})");
+                AppLogger.Info($"Beta channel: always showing update (tag=ci)");
             }
             else
             {
-                // Stable channel: compare semver
                 var tag = release.tag_name.TrimStart('v');
                 var current = new Version(CurrentVersion);
                 var latest = Version.TryParse(tag, out var parsed) ? parsed : new Version(0, 0, 0);
@@ -133,7 +176,8 @@ public static class AutoUpdater
     }
 
     /// <summary>
-    /// Download update zip, extract, and launch updater batch file.
+    /// Download update zip, extract, copy non-exe files, and save pending state.
+    /// User is prompted to restart; they can choose Later.
     /// </summary>
     public static async Task<bool> DownloadAndInstall(UpdateInfo info, IWin32Window owner)
     {
@@ -147,9 +191,10 @@ public static class AutoUpdater
         try
         {
             var exeDir = Path.GetDirectoryName(Application.ExecutablePath) ?? ".";
-            // SAFETY: All file ops must stay inside exeDir
             var baseDir = Path.GetFullPath(exeDir);
             var updateDir = Path.Combine(baseDir, ".update");
+
+            // Fresh start
             if (Directory.Exists(updateDir))
             {
                 try { Directory.Delete(updateDir, true); }
@@ -180,7 +225,7 @@ public static class AutoUpdater
 
             AppLogger.Info($"Downloaded {readSoFar} bytes to {zipPath}");
 
-            // Extract zip — SAFETY: reject any entry that escapes updateDir
+            // Extract zip — SAFETY: reject path traversal
             AppLogger.Info("Extracting update...");
             using (var archive = ZipFile.OpenRead(zipPath))
             {
@@ -204,16 +249,15 @@ public static class AutoUpdater
                 }
             }
 
-            // Retry delete zip (Windows Defender / AV may hold a lock briefly)
+            // Retry delete zip (Windows Defender may hold a lock)
             AppLogger.Info("Deleting update.zip...");
             await RetryDeleteAsync(zipPath);
 
-            // SAFETY: Only copy EXPLICIT known filenames to baseDir (no wildcard)
-            var allowedFiles = new[] { "CantoneseDictation.exe", "tokens.txt", "am.mvn", "README.txt" };
             // Copy non-exe files now (safe while running)
+            var allowedFiles = new[] { "CantoneseDictation.exe", "tokens.txt", "am.mvn", "README.txt" };
             foreach (var f in allowedFiles)
             {
-                if (f == "CantoneseDictation.exe") continue; // exe must be copied AFTER exit via batch
+                if (f == "CantoneseDictation.exe") continue; // exe handled by batch post-exit
                 var src = Path.Combine(updateDir, f);
                 if (File.Exists(src))
                 {
@@ -223,39 +267,41 @@ public static class AutoUpdater
                 }
             }
 
-            // Write updater batch — ONLY copies the exe (other files already done)
-
-            // Write xcopy exclude file
-            File.WriteAllText(Path.Combine(updateDir, "_exclude.txt"), "model_quant.onnx\r\n");
-
             // Write updater batch
             var currentPid = Environment.ProcessId;
             var currentExe = Application.ExecutablePath;
             var updaterPath = Path.Combine(updateDir, "updater.bat");
-
             var batchContent = GetUpdaterBatchContent(currentPid, currentExe, updateDir, exeDir);
             File.WriteAllText(updaterPath, batchContent);
 
-            AppLogger.Info($"Launching updater: {updaterPath}");
-            AppLogger.Info($"Update dir: {updateDir}");
-            AppLogger.Info($"Target exe: {currentExe}");
+            // Save pending marker
+            File.WriteAllText(PendingMarkerPath, info.Version);
 
-            // Launch updater (visible window so user can see progress)
-            Process.Start(new ProcessStartInfo
+            AppLogger.Info("Update downloaded and ready to apply");
+
+            // Ask user to restart now or later
+            var msg = $"Update {info.Version} has been downloaded!\n\nRestart to apply the update?";
+            var restart = MessageBox.Show(owner, msg, "Update Ready",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+            if (restart == DialogResult.Yes)
             {
-                FileName = updaterPath,
-                WindowStyle = ProcessWindowStyle.Normal,
-                CreateNoWindow = false,
-                UseShellExecute = true
-            });
+                AppLogger.Info("User chose to restart now");
+                ApplyPendingUpdate();
+            }
+            else
+            {
+                AppLogger.Info("User chose Later — pending marker saved");
+                SetStatusMsg?.Invoke("Update ready — click Update to restart");
+            }
 
             return true;
         }
         catch (Exception ex)
         {
             AppLogger.Error("Update download failed", ex);
-            MessageBox.Show(owner, $"Update failed: {ex.Message}\n\nCheck the log file for details.", "Update Error",
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(owner, $"Update failed: {ex.Message}\n\nCheck the log file for details.",
+                "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
         }
     }
@@ -276,7 +322,6 @@ public static class AutoUpdater
                 await Task.Delay(500);
             }
         }
-        // Last attempt - let it throw
         File.Delete(path);
     }
 

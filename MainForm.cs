@@ -39,11 +39,15 @@ public class MainForm : Form
     private SenseVoiceEngine? _engine = null;
     private bool _isRecording = false;
     private string _lastAsrText = "";
+    private float _micGain = 2.0f; // default 2x amplification
 
     public MainForm()
     {
         // Load hotwords
         _hotwordMgr.Load();
+
+        // Wire up AutoUpdater status callback
+        AutoUpdater.SetStatusMsg = msg => SetStatus(msg);
 
         // Initialize engine
         var modelDir = AppDomain.CurrentDomain.BaseDirectory;
@@ -248,6 +252,48 @@ public class MainForm : Form
             SetStatus(AutoUpdater.UseBetaChannel ? "🧪 Beta channel: CI builds" : "✅ Stable channel: releases");
         };
         recRow.Controls.Add(btnBeta);
+
+        // ─── Mic Gain slider ───
+        var gainLabel = new Label
+        {
+            Text = "🔊 Gain:",
+            Font = new Font("Segoe UI", 9),
+            ForeColor = FgSubtle,
+            BackColor = BgDark,
+            AutoSize = true,
+            Location = new Point(780, 5)
+        };
+        var gainTrack = new TrackBar
+        {
+            Minimum = 10,
+            Maximum = 100,
+            Value = (int)(_micGain * 10),
+            TickFrequency = 10,
+            SmallChange = 5,
+            LargeChange = 10,
+            Width = 120,
+            Location = new Point(830, 2),
+            BackColor = BgDark,
+            ForeColor = FgWhite,
+            Cursor = Cursors.Hand
+        };
+        var gainVal = new Label
+        {
+            Text = $"{_micGain:F1}x",
+            Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            ForeColor = FgGreen,
+            BackColor = BgDark,
+            AutoSize = true,
+            Location = new Point(955, 5)
+        };
+        gainTrack.ValueChanged += (s, e) =>
+        {
+            _micGain = gainTrack.Value / 10.0f;
+            gainVal.Text = $"{_micGain:F1}x";
+        };
+        recRow.Controls.Add(gainLabel);
+        recRow.Controls.Add(gainTrack);
+        recRow.Controls.Add(gainVal);
 
         recRow.Controls.Add(btnRecord);
         recRow.Controls.Add(langLabel);
@@ -542,6 +588,18 @@ public class MainForm : Form
 
             var shortSamples = new short[recordedSamples.Count / 2];
             Buffer.BlockCopy(recordedSamples.ToArray(), 0, shortSamples, 0, recordedSamples.Count);
+
+            // Apply mic gain amplification
+            if (Math.Abs(_micGain - 1.0f) > 0.01f)
+            {
+                for (int i = 0; i < shortSamples.Length; i++)
+                {
+                    int amplified = (int)(shortSamples[i] * _micGain);
+                    shortSamples[i] = (short)Math.Clamp(amplified, short.MinValue, short.MaxValue);
+                }
+                AppLogger.Info($"Mic gain applied: {_micGain:F1}x");
+            }
+
             using (var writer = new NAudio.Wave.WaveFileWriter(tmpPath, new NAudio.Wave.WaveFormat(16000, 16, 1)))
             {
                 writer.WriteSamples(shortSamples, 0, shortSamples.Length);
@@ -710,6 +768,19 @@ public class MainForm : Form
 
     private async Task CheckForUpdateAsync()
     {
+        // Check if an update was already downloaded
+        if (AutoUpdater.IsUpdatePending)
+        {
+            var msg = "An update has already been downloaded.\n\nRestart to apply?";
+            var restart = MessageBox.Show(msg, "Update Ready",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (restart == DialogResult.Yes)
+            {
+                AutoUpdater.ApplyPendingUpdate();
+            }
+            return;
+        }
+
         SetStatus("🔍 Checking for updates...");
         AppLogger.Info("Checking for updates...");
 
@@ -738,13 +809,8 @@ public class MainForm : Form
         if (result == DialogResult.Yes)
         {
             SetStatus("⬇️ Downloading update...");
-            var ok = await AutoUpdater.DownloadAndInstall(info, this);
-            if (ok)
-            {
-                AppLogger.Info("Installing update, app will restart...");
-                // Batch updater will close this, copy new files, restart
-                Application.Exit();
-            }
+            await AutoUpdater.DownloadAndInstall(info, this);
+            // DownloadAndInstall handles restart prompt internally
         }
     }
 }
