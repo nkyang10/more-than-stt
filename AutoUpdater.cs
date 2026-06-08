@@ -105,14 +105,26 @@ public static class AutoUpdater
         }
 
         AppLogger.Info("Applying pending update...");
-        Process.Start(new ProcessStartInfo
+        try
         {
-            FileName = updaterPath,
-            WindowStyle = ProcessWindowStyle.Normal,
-            CreateNoWindow = false,
-            UseShellExecute = true
-        });
-        Application.Exit();
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c start \"\" /min \"{updaterPath}\"",
+                WindowStyle = ProcessWindowStyle.Hidden,
+                CreateNoWindow = true,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("Failed to start updater", ex);
+            MessageBox.Show($"Failed to start updater: {ex.Message}", "Update Error",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        // Force immediate termination so the batch can replace the exe
+        Environment.Exit(0);
     }
 
     /// <summary>Check GitHub for latest release. Returns null on error.</summary>
@@ -394,7 +406,7 @@ echo.
 echo Starting updated version...
 echo.
 
-start """" ""{currentExe}""
+start "" ""{currentExe}""
 
 :: Self-delete
 (goto) 2>&1 & del ""%~f0""
